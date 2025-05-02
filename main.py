@@ -1,45 +1,56 @@
-# Passo a passo para aplicar texturas nas máscaras do tênis usando Python e PIL
-
-from PIL import Image
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from pydantic import BaseModel
+from typing import List, Dict
 import base64
 from io import BytesIO
+from PIL import Image
 import os
 
-# 1. Função para aplicar uma textura base64 em uma máscara
-def aplicar_textura(mask_path, textura_base64, imagem_base):
-    # Abrir a imagem da máscara e converter para modo de transparência (L)
-    mascara = Image.open(mask_path).convert("L")
+app = FastAPI()
 
-    # Remover o prefixo do base64 (data:image/png;base64,)
-    textura_data = base64.b64decode(textura_base64.split(',')[1])
+# CORS liberado
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    # Abrir a imagem da textura a partir do base64
-    textura = Image.open(BytesIO(textura_data)).convert("RGBA")
+class GerarTenisRequest(BaseModel):
+    cliente_id: str
+    masks: List[str]
+    escolhas: Dict[str, str]
+    textures: Dict[str, str]
 
-    # Redimensionar a textura para o tamanho da máscara
-    textura = textura.resize(mascara.size)
+@app.post("/gerar-tenis")
+def gerar_tenis(request: GerarTenisRequest):
+    # Carrega o mockup base
+    base_path = os.path.join(os.path.dirname(__file__), "mockup_tifi.png")
+    imagem_base = Image.open(base_path).convert("RGBA")
 
-    # Aplicar a máscara sobre a textura (fundo transparente onde não for branco)
-    textura_mascarada = Image.composite(textura, imagem_base, mascara)
-    return textura_mascarada
+    for letra in request.masks:
+        textura_nome = request.escolhas[letra]
+        textura_base64 = request.textures[letra]
 
-# 2. Criar imagem base transparente do tamanho do mockup do tênis (ajuste conforme o seu mockup)
-imagem_base = Image.new("RGBA", (1024, 768), (255, 255, 255, 0))
+        # Decodifica a imagem da textura em base64
+        textura_bytes = base64.b64decode(textura_base64.split(",")[1])
+        textura_img = Image.open(BytesIO(textura_bytes)).convert("RGBA")
 
-# 3. Lista de máscaras que deseja aplicar
-mascaras = ['A', 'B', 'C']
+        # Carrega a máscara
+        mask_path = os.path.join(os.path.dirname(__file__), f"masks/{letra}.png")
+        mascara = Image.open(mask_path).convert("L")
 
-# 4. Texturas em base64 recebidas da API ou input do cliente
-texturas_base64 = {
-    'A': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...',  # couro_bovino
-    'B': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...',  # pirarucu
-    'C': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...',  # pirarucu
-}
+        # Redimensiona textura para o tamanho da máscara
+        textura_redimensionada = textura_img.resize(imagem_base.size)
 
-# 5. Aplicar cada textura na sua máscara correspondente
-for letra in mascaras:
-    caminho_mascara = os.path.join('masks', f'{letra}.png')
-    imagem_base = aplicar_textura(caminho_mascara, texturas_base64[letra], imagem_base)
+        # Aplica a máscara
+        imagem_base.paste(textura_redimensionada, (0, 0), mascara)
 
-# 6. Salvar imagem final do tênis personalizado
-imagem_base.save('tenis_personalizado.png')
+    # Salva resultado em buffer e envia
+    buffer = BytesIO()
+    imagem_base.save(buffer, format="PNG")
+    buffer.seek(0)
+
+    return Response(content=buffer.getvalue(), media_type="image/png")
